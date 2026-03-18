@@ -38,10 +38,8 @@ fi
 # We use python3 to parse YAML rather than bundling a YAML parser in bash.
 # This avoids a jq/yq dependency for a lightweight field lookup.
 
-yaml_get() {
-    local key="$1"
-    local default="${2:-}"
-    python3 - "$CONFIG_FILE" "$key" "$default" <<'EOF'
+# Parse all needed config values in a single python3 call (one value per line)
+_CONFIG_VALS=$(python3 - "$CONFIG_FILE" <<'PYEOF'
 import sys, re
 
 def parse_simple_yaml(path):
@@ -50,48 +48,51 @@ def parse_simple_yaml(path):
     current_section = None
     with open(path) as f:
         for line in f:
-            # Strip comments
             line = re.sub(r'\s*#.*$', '', line).rstrip()
             if not line:
                 continue
-            # Section header (no leading spaces)
             m = re.match(r'^(\w[\w\-]*)\s*:\s*$', line)
             if m:
                 current_section = m.group(1)
                 data[current_section] = {}
                 continue
-            # Nested key
             m = re.match(r'^\s{2,}(\w[\w\-_]*)\s*:\s*(.*)$', line)
             if m and current_section:
                 val = m.group(2).strip().strip('"').strip("'")
                 data[current_section][m.group(1)] = val
                 continue
-            # Top-level key: value
             m = re.match(r'^(\w[\w\-_]*)\s*:\s*(.+)$', line)
             if m:
                 val = m.group(2).strip().strip('"').strip("'")
                 data[m.group(1)] = val
     return data
 
-path, key, default = sys.argv[1], sys.argv[2], sys.argv[3]
-parts = key.split('.')
-data = parse_simple_yaml(path)
-val = data
-try:
-    for p in parts:
-        val = val[p]
-    print(str(val) if val is not None else default)
-except (KeyError, TypeError):
-    print(default)
-EOF
-}
+def get(data, key, default=''):
+    parts = key.split('.')
+    val = data
+    try:
+        for p in parts:
+            val = val[p]
+        return str(val) if val is not None else default
+    except (KeyError, TypeError):
+        return default
 
-SENDER_ID=$(yaml_get "bridge.sender_id" "")
-POLL_INTERVAL=$(yaml_get "bridge.poll_interval" "30")
-MESSAGE_TIMEOUT=$(yaml_get "bridge.message_timeout" "600")
-ANTENNA_TIMEOUT=$(yaml_get "bridge.antenna_timeout" "900")
-BRIEFING_TIME=$(yaml_get "schedule.time" "07:00")
-BRIEFING_TZ=$(yaml_get "schedule.timezone" "UTC")
+path = sys.argv[1]
+data = parse_simple_yaml(path)
+print(get(data, 'bridge.sender_id', ''))
+print(get(data, 'bridge.poll_interval', '30'))
+print(get(data, 'bridge.message_timeout', '600'))
+print(get(data, 'bridge.antenna_timeout', '900'))
+print(get(data, 'schedule.time', '07:00'))
+print(get(data, 'schedule.timezone', 'UTC'))
+PYEOF
+)
+SENDER_ID=$(echo "$_CONFIG_VALS"      | sed -n '1p')
+POLL_INTERVAL=$(echo "$_CONFIG_VALS"  | sed -n '2p')
+MESSAGE_TIMEOUT=$(echo "$_CONFIG_VALS" | sed -n '3p')
+ANTENNA_TIMEOUT=$(echo "$_CONFIG_VALS" | sed -n '4p')
+BRIEFING_TIME=$(echo "$_CONFIG_VALS"  | sed -n '5p')
+BRIEFING_TZ=$(echo "$_CONFIG_VALS"    | sed -n '6p')
 
 if [ -z "$SENDER_ID" ]; then
     echo "ERROR: bridge.sender_id is not set in $CONFIG_FILE" >&2
@@ -158,14 +159,46 @@ send_to_user() {
     "$WACLI_BIN" send text --to "$SENDER_ID" --message "$1" 2>/dev/null
 }
 
+generate_uuid() {
+    uuidgen 2>/dev/null | tr '[:upper:]' '[:lower:]' || python3 -c "import uuid; print(uuid.uuid4())"
+}
+
+# load_or_create_session <label>
+# Sets SESSION_FLAG. <label> is used only for log messages (e.g. "Briefing" or "Message").
+load_or_create_session() {
+    local label="${1:-Session}"
+    if [ -f "$SESSION_FILE" ]; then
+        local session_id
+        session_id=$(cat "$SESSION_FILE")
+        SESSION_FLAG="--resume $session_id"
+        log "$label: resuming session $session_id"
+    else
+        local session_id
+        session_id=$(generate_uuid)
+        if [ -z "$session_id" ]; then
+            log "$label: failed to generate session UUID"
+            SESSION_FLAG=""
+        else
+            echo "$session_id" > "$SESSION_FILE"
+            SESSION_FLAG="--session-id $session_id"
+            log "$label: created session $session_id"
+        fi
+    fi
+}
+
 # ── Setup ─────────────────────────────────────────────────────────────────────
 
 # Unset CLAUDECODE so claude can run outside nested sessions
 unset CLAUDECODE
 
 # Rotate log at 1MB
-if [ -f "$LOG_FILE" ] && [ "$(wc -c < "$LOG_FILE")" -gt 1048576 ]; then
-    mv "$LOG_FILE" "${LOG_FILE}.bak"
+if [ -f "$LOG_FILE" ]; then
+    if [ "$OS" = "Darwin" ]; then
+        _LOG_SIZE=$(stat -f%z "$LOG_FILE" 2>/dev/null || echo 0)
+    else
+        _LOG_SIZE=$(stat -c%s "$LOG_FILE" 2>/dev/null || echo 0)
+    fi
+    [ "$_LOG_SIZE" -gt 1048576 ] && mv "$LOG_FILE" "${LOG_FILE}.bak"
 fi
 
 # Clean stale error file from previous run
@@ -194,24 +227,11 @@ MARKER_DATE=""
 BRIEFING_HOUR=$(echo "$BRIEFING_TIME" | cut -d: -f1 | sed 's/^0//')
 CURRENT_LOCAL_HOUR=$(date +%-H 2>/dev/null || date +%H | sed 's/^0//')
 
-if [ "$CURRENT_LOCAL_HOUR" = "$BRIEFING_HOUR" ] && [ "$MARKER_DATE" != "$CURRENT_DATE" ]; then
+if [ "$CURRENT_LOCAL_HOUR" -eq "$BRIEFING_HOUR" ] && [ "$MARKER_DATE" != "$CURRENT_DATE" ]; then
     log "Briefing: triggering antenna run"
 
     # Build session flag
-    if [ -f "$SESSION_FILE" ]; then
-        ANTENNA_SESSION_ID=$(cat "$SESSION_FILE")
-        SESSION_FLAG="--resume $ANTENNA_SESSION_ID"
-        log "Briefing: resuming session $ANTENNA_SESSION_ID"
-    else
-        ANTENNA_SESSION_ID=$(uuidgen 2>/dev/null | tr '[:upper:]' '[:lower:]' || python3 -c "import uuid; print(uuid.uuid4())")
-        if [ -z "$ANTENNA_SESSION_ID" ]; then
-            log "Briefing: failed to generate session UUID"
-        else
-            echo "$ANTENNA_SESSION_ID" > "$SESSION_FILE"
-            SESSION_FLAG="--session-id $ANTENNA_SESSION_ID"
-            log "Briefing: created session $ANTENNA_SESSION_ID"
-        fi
-    fi
+    load_or_create_session "Briefing"
 
     # Run antenna digest pipeline
     if [ -n "$ANTENNA_BIN" ]; then
@@ -289,8 +309,16 @@ print(json.dumps({'texts': texts, 'latest_ts': latest_ts}))
 EOF
 )
 
-USER_MSGS=$(echo "$PARSED" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('texts',''))")
-LATEST_MSG_TS=$(echo "$PARSED" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('latest_ts',''))")
+# Decode both fields from PARSED in one python3 call; fields separated by a unique delimiter line
+_PARSED_OUT=$(echo "$PARSED" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+print(d.get('texts', ''))
+print('---ANTENNA-TS---')
+print(d.get('latest_ts', ''))
+")
+USER_MSGS=$(echo "$_PARSED_OUT" | sed -n '1,/^---ANTENNA-TS---$/{ /^---ANTENNA-TS---$/!p }')
+LATEST_MSG_TS=$(echo "$_PARSED_OUT" | sed -n '/^---ANTENNA-TS---$/,$ { /^---ANTENNA-TS---$/!p }')
 
 if [ -z "$USER_MSGS" ]; then
     echo "$FALLBACK_TS" > "$STATE_FILE"
@@ -316,19 +344,10 @@ log "Next state timestamp: $NEXT_STATE_TS"
 
 # ── Session management ───────────────────────────────────────────────────────
 
-if [ -f "$SESSION_FILE" ]; then
-    BRIDGE_SESSION_ID=$(cat "$SESSION_FILE")
-    SESSION_FLAG="--resume $BRIDGE_SESSION_ID"
-    log "Resuming session $BRIDGE_SESSION_ID"
-else
-    BRIDGE_SESSION_ID=$(uuidgen 2>/dev/null | tr '[:upper:]' '[:lower:]' || python3 -c "import uuid; print(uuid.uuid4())")
-    if [ -z "$BRIDGE_SESSION_ID" ]; then
-        log "Failed to generate session UUID"
-        exit 1
-    fi
-    echo "$BRIDGE_SESSION_ID" > "$SESSION_FILE"
-    SESSION_FLAG="--session-id $BRIDGE_SESSION_ID"
-    log "Created new session $BRIDGE_SESSION_ID"
+load_or_create_session "Message"
+if [ -z "$SESSION_FLAG" ]; then
+    log "Failed to generate session UUID"
+    exit 1
 fi
 
 log "Processing: ${USER_MSGS:0:80}..."
@@ -337,11 +356,9 @@ log "Processing: ${USER_MSGS:0:80}..."
 # Send an immediate acknowledgement for requests that will take a while.
 
 IS_LONG_TASK=false
-if echo "$USER_MSGS" | grep -qiE '/(read-article|read-book|read-podcast|skill-creator|antenna|create-skill)'; then
-    IS_LONG_TASK=true
-fi
-# Bare URLs (without quick-action keywords) also trigger long processing
-if echo "$USER_MSGS" | grep -qiE 'https?://' && ! echo "$USER_MSGS" | grep -qiE '(to done|mark|delete|move)'; then
+# Skill commands or bare URLs (not quick-action keywords) get an immediate ack
+if [[ "$USER_MSGS" =~ /(read-article|read-book|read-podcast|skill-creator|antenna|create-skill) ]] || \
+   ( [[ "$USER_MSGS" =~ https?:// ]] && ! [[ "$USER_MSGS" =~ (to\ done|mark|delete|move) ]] ); then
     IS_LONG_TASK=true
 fi
 

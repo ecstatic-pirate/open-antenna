@@ -45,8 +45,6 @@ program
   .option('-c, --config <path>', 'Path to config.yaml', './config.yaml')
   .action(async (options) => {
     const fs = require('fs');
-    const os = require('os');
-    const pathLib = require('path');
     const yaml = require('js-yaml');
 
     const configPath = path.resolve(options.config);
@@ -62,7 +60,7 @@ program
     fs.mkdirSync(outputDir, { recursive: true });
 
     const today = new Date().toISOString().split('T')[0];
-    const sampleMd = pathLib.join(outputDir, `${today}-test-digest.md`);
+    const sampleMd = path.join(outputDir, `${today}-test-digest.md`);
 
     const sampleContent = `# Test Digest — ${today}
 
