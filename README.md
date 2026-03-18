@@ -10,14 +10,15 @@ Optionally: a two-way WhatsApp AI assistant. Send URLs, questions, or commands f
 
 ```bash
 npm install -g open-antenna
+claude login        # authenticate with your Claude account (one-time)
 antenna init
 ```
 
-`antenna init` handles everything in one terminal session: dependency checks, WhatsApp auth, email setup, source configuration, profile setup, and cron scheduling.
+`antenna init` handles everything in one terminal session: dependency checks, Claude auth, WhatsApp auth, email setup, source configuration, profile setup, and cron scheduling.
 
 **Prerequisites:**
 - Node.js 18+
-- [Claude Code CLI](https://claude.ai/code)
+- [Claude Code CLI](https://claude.ai/code) — install, then run `claude login`
 - Python 3
 - A WhatsApp account (for WhatsApp delivery or the bridge)
 
@@ -209,9 +210,11 @@ Logs for cron runs go to `~/.antenna/cron.log`.
 | Dependency | Purpose | Install |
 |-----------|---------|---------|
 | Node.js 18+ | Runtime | [nodejs.org](https://nodejs.org) |
-| Claude Code CLI | AI processing | [claude.ai/code](https://claude.ai/code) |
+| Claude Code CLI | AI processing | [claude.ai/code](https://claude.ai/code) — then run `claude login` |
 | Python 3 | YouTube + HN scanners | `brew install python3` or [python.org](https://python.org) |
 | wacli | WhatsApp CLI | Auto-installed by `antenna init` |
+
+**Authentication:** Open Antenna uses `claude login` (OAuth) — no API key required. Any Claude plan works: Pro, Max, Teams, or Enterprise. If you have an `ANTHROPIC_API_KEY` set in your environment, Claude will use that instead.
 
 Python packages (`requests`, `feedparser`) are installed automatically by `antenna init`.
 
