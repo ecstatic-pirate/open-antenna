@@ -29,6 +29,13 @@ set -euo pipefail
 CONFIG_FILE="${ANTENNA_CONFIG:-./config.yaml}"
 DATA_DIR="${ANTENNA_DATA_DIR:-$HOME/.antenna}"
 
+# Source ~/.antenna/env if it exists — picks up ANTHROPIC_API_KEY and other vars
+# set during `antenna init` without requiring shell profile changes.
+if [ -f "$HOME/.antenna/env" ]; then
+    # shellcheck source=/dev/null
+    source "$HOME/.antenna/env"
+fi
+
 if [ ! -f "$CONFIG_FILE" ]; then
     echo "ERROR: config file not found: $CONFIG_FILE" >&2
     exit 1
