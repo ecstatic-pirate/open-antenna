@@ -49,6 +49,7 @@ program
   .action(async (options) => {
     const fs = require('fs');
     const yaml = require('js-yaml');
+    const { todayString } = require('../lib/utils');
 
     const configPath = path.resolve(options.config);
     if (!fs.existsSync(configPath)) {
@@ -61,7 +62,7 @@ program
     const outputDir = path.resolve(config.output?.dir ?? './output');
     fs.mkdirSync(outputDir, { recursive: true });
 
-    const today = new Date().toISOString().split('T')[0];
+    const today = todayString();
     const sampleMd = path.join(outputDir, `${today}-test-digest.md`);
 
     const sampleContent = `# Test Digest — ${today}
