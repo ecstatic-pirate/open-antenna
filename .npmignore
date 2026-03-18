@@ -1,0 +1,21 @@
+# Development
+.git/
+.gitignore
+*.log
+
+# Output files (user-generated, not part of the package)
+output/
+
+# Scanners sentinel file
+scanners/.deps-installed
+
+# Editor / OS
+.DS_Store
+.vscode/
+*.swp
+*.swo
+
+# Test artifacts
+*.test.js
+__tests__/
+coverage/

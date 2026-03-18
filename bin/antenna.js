@@ -11,7 +11,8 @@ program
   .description('AI-powered daily intelligence briefing from YouTube + Hacker News')
   .version(pkg.version);
 
-// antenna run
+// ── antenna run ───────────────────────────────────────────────────────────────
+
 program
   .command('run')
   .description('Run the digest pipeline once')
@@ -26,7 +27,8 @@ program
     });
   });
 
-// antenna init
+// ── antenna init ──────────────────────────────────────────────────────────────
+
 program
   .command('init')
   .description('Interactive setup wizard — configure sources, notifications, and schedule')
@@ -38,7 +40,8 @@ program
     });
   });
 
-// antenna test-notify
+// ── antenna test-notify ───────────────────────────────────────────────────────
+
 program
   .command('test-notify')
   .description('Send a test notification through all configured channels')
@@ -55,7 +58,6 @@ program
 
     const config = yaml.load(fs.readFileSync(configPath, 'utf8'));
 
-    // Generate a minimal sample PDF/markdown for testing
     const outputDir = path.resolve(config.output?.dir ?? './output');
     fs.mkdirSync(outputDir, { recursive: true });
 
@@ -83,7 +85,6 @@ from your configured YouTube channels and Hacker News.
 
     let digestPath = sampleMd;
 
-    // Convert to PDF if configured
     const wantPdf = config.output?.format === 'pdf';
     if (wantPdf) {
       try {
@@ -99,7 +100,6 @@ from your configured YouTube channels and Hacker News.
     let sent = 0;
     let failed = 0;
 
-    // WhatsApp
     if (notify.whatsapp?.enabled) {
       try {
         const notifyWa = require('../lib/notify-whatsapp');
@@ -114,7 +114,6 @@ from your configured YouTube channels and Hacker News.
       console.log('[test-notify] WhatsApp: disabled (set notifications.whatsapp.enabled: true to enable)');
     }
 
-    // Email
     if (notify.email?.enabled) {
       try {
         const notifyEmail = require('../lib/notify-email');
@@ -139,17 +138,24 @@ from your configured YouTube channels and Hacker News.
     }
   });
 
-// antenna schedule
+// ── antenna schedule ──────────────────────────────────────────────────────────
+
 program
   .command('schedule')
   .description('View or update the daily schedule')
   .option('-c, --config <path>', 'Path to config.yaml', './config.yaml')
-  .action(() => {
-    // TODO: implement in Phase 4
-    console.log('schedule: coming in Phase 4');
+  .option('-t, --time <HH:MM>', 'New time (24h format, e.g. 07:30)')
+  .option('-z, --timezone <tz>', 'New timezone (e.g. America/New_York)')
+  .action((options) => {
+    const schedule = require('../lib/schedule');
+    schedule(options).catch((err) => {
+      console.error('Error:', err.message);
+      process.exit(1);
+    });
   });
 
-// antenna bridge <start|stop|status|logs>
+// ── antenna bridge <start|stop|status|logs> ───────────────────────────────────
+
 const bridge = program
   .command('bridge')
   .description('Manage the two-way WhatsApp AI assistant daemon');
@@ -200,7 +206,8 @@ bridge
     });
   });
 
-// antenna skills
+// ── antenna skills ────────────────────────────────────────────────────────────
+
 program
   .command('skills')
   .description('List installed skills')
@@ -210,27 +217,132 @@ program
     const skillsDir = path.join(__dirname, '..', 'skills');
     const entries = fs.readdirSync(skillsDir, { withFileTypes: true })
       .filter((e) => e.isDirectory())
-      .map((e) => e.name);
+      .map((e) => e.name)
+      .sort();
 
     if (entries.length === 0) {
       console.log('No skills installed.');
       return;
     }
 
-    console.log('Installed skills:\n');
-    for (const name of entries) {
-      const skillFile = path.join(skillsDir, name, 'SKILL.md');
-      if (!fs.existsSync(skillFile)) continue;
+    if (options.detail) {
+      console.log('Installed skills:\n');
+      for (const name of entries) {
+        const skillFile = path.join(skillsDir, name, 'SKILL.md');
+        if (!fs.existsSync(skillFile)) continue;
 
-      if (options.detail) {
         const content = fs.readFileSync(skillFile, 'utf8');
-        const descMatch = content.match(/^description:\s*>?\s*\n\s+(.+)/m);
-        const desc = descMatch ? descMatch[1].trim() : '(no description)';
-        console.log(`  ${name}\n    ${desc}\n`);
-      } else {
+
+        // Extract description from YAML frontmatter
+        // Handles both inline (`description: text`) and block scalar (`description: >\n  text`)
+        const frontmatterMatch = content.match(/^---\n([\s\S]*?)\n---/);
+        let desc = '(no description)';
+
+        if (frontmatterMatch) {
+          const fm = frontmatterMatch[1];
+          // Block scalar: description: >\n  text...
+          const blockMatch = fm.match(/^description:\s*[|>]\s*\n((?:\s+.+\n?)+)/m);
+          if (blockMatch) {
+            desc = blockMatch[1]
+              .split('\n')
+              .map((l) => l.trim())
+              .filter(Boolean)
+              .join(' ');
+          } else {
+            // Inline: description: text
+            const inlineMatch = fm.match(/^description:\s*(.+)/m);
+            if (inlineMatch) desc = inlineMatch[1].trim().replace(/^["']|["']$/g, '');
+          }
+        }
+
+        // Truncate long descriptions
+        if (desc.length > 120) desc = desc.slice(0, 117) + '...';
+
+        console.log(`  ${name}`);
+        console.log(`    ${desc}`);
+        console.log('');
+      }
+    } else {
+      console.log('Installed skills:\n');
+      for (const name of entries) {
         console.log(`  ${name}`);
       }
+      console.log('\nRun `antenna skills --detail` for descriptions.');
     }
+  });
+
+// ── antenna create-skill ──────────────────────────────────────────────────────
+
+program
+  .command('create-skill <description>')
+  .description('Create a new skill from a natural language description')
+  .option('-c, --config <path>', 'Path to config.yaml', './config.yaml')
+  .addHelpText('after', `
+Examples:
+  antenna create-skill "summarize Slack threads from #engineering"
+  antenna create-skill "weekly team standup digest from Linear tickets"
+  antenna create-skill "fetch top Reddit posts from r/technology"
+
+Claude will:
+  1. Research how to do it (APIs, auth, tools)
+  2. Ask you for credentials if needed
+  3. Generate a SKILL.md
+  4. Test it with sample input
+  5. Install it to skills/ so it's immediately available
+`)
+  .action((description, options) => {
+    const { spawnSync: spawnS } = require('child_process');
+    const skillsDir = path.join(__dirname, '..', 'skills');
+    const createSkillMd = path.join(skillsDir, 'create-skill', 'SKILL.md');
+
+    if (!spawnS('which', ['claude'], { encoding: 'utf8' }).stdout?.trim()) {
+      console.error('Claude Code CLI not found. Install from: https://claude.ai/code');
+      process.exit(1);
+    }
+
+    const prompt = `Run the create-skill meta-skill to create a new skill.
+
+User's request: "${description}"
+
+Skills directory: ${skillsDir}
+Create-skill skill: ${createSkillMd}
+Config: ${path.resolve(options.config)}
+
+Follow the create-skill SKILL.md exactly:
+1. Research how to implement this skill (APIs, tools, auth needed)
+2. Ask the user for any required credentials
+3. Generate a complete SKILL.md
+4. Test it with sample input
+5. Install it to ${skillsDir}/{skill-name}/SKILL.md
+
+The skill should be immediately usable after creation.`;
+
+    console.log(`[create-skill] Invoking Claude to create skill: "${description}"`);
+    console.log('[create-skill] Claude will research the implementation and may ask questions.\n');
+
+    // Use interactive mode (no --print) so Claude can prompt for credentials
+    const result = spawnS(
+      'claude',
+      ['--allowedTools', 'Read,Write,Bash,WebFetch', '--add-dir', skillsDir, '-p', prompt],
+      {
+        stdio: 'inherit',
+        encoding: 'utf8',
+        timeout: 600_000,
+      }
+    );
+
+    if (result.status !== 0) {
+      console.error(`[create-skill] Claude exited with status ${result.status}`);
+      process.exit(result.status ?? 1);
+    }
+
+    // Confirm the skill was installed
+    const newSkills = require('fs').readdirSync(skillsDir, { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name);
+
+    console.log('\n[create-skill] Done. Installed skills:');
+    for (const s of newSkills.sort()) console.log(`  ${s}`);
   });
 
 program.parse(process.argv);
