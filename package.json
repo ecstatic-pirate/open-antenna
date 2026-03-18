@@ -1,0 +1,33 @@
+{
+  "name": "open-antenna",
+  "version": "0.1.0",
+  "description": "AI-powered daily intelligence briefing — scans YouTube + Hacker News, processes via Claude, delivers PDF digest",
+  "main": "lib/run.js",
+  "bin": {
+    "antenna": "./bin/antenna.js"
+  },
+  "scripts": {
+    "test": "echo \"No tests yet\" && exit 0"
+  },
+  "keywords": [
+    "ai",
+    "briefing",
+    "digest",
+    "claude",
+    "youtube",
+    "hackernews",
+    "newsletter",
+    "automation"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "commander": "^12.0.0",
+    "js-yaml": "^4.1.0",
+    "md-to-pdf": "^5.2.4",
+    "nodemailer": "^6.9.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

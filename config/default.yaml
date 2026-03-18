@@ -1,0 +1,67 @@
+# Open Antenna — default configuration
+# Copy this file to ./config.yaml and fill in your details.
+# Run `antenna init` to set everything up interactively.
+
+# Sources to scan
+sources:
+  youtube:
+    enabled: true
+    channels:
+      - handle: "@allin"
+        label: "All-In Podcast"
+      - handle: "@LennysPodcast"
+        label: "Lenny's Podcast"
+    max_age_hours: 24      # only fetch videos published in the last N hours
+    exclude_shorts: true   # skip YouTube Shorts (< 60s)
+
+  hackernews:
+    enabled: true
+    top_n: 20              # number of top stories to evaluate
+    min_score: 50          # only consider stories with score >= N (null = no filter)
+
+# About you — personalizes relevance filtering and digest tone
+profile:
+  name: "Your Name"
+  role: "Your role (e.g. VP Engineering, solo founder, investor)"
+  topics:
+    - AI
+    - developer tools
+    - startups
+    - engineering
+
+# AI processing
+processing:
+  claude_model: "sonnet"   # sonnet (default) or opus
+
+# Output
+output:
+  dir: "./output"          # where digest files are written
+  format: "pdf"            # pdf or markdown
+
+# Notifications
+notifications:
+  whatsapp:
+    enabled: false
+    recipient: "+1234567890"   # phone number to send the digest PDF to
+
+  email:
+    enabled: false
+    smtp_host: "smtp.gmail.com"
+    smtp_port: 587
+    smtp_user: "you@gmail.com"
+    smtp_pass_env: "ANTENNA_SMTP_PASS"   # env var name holding your SMTP password
+    to: "you@gmail.com"
+    subject_prefix: "[Daily Intel]"
+
+# WhatsApp Bridge — two-way AI assistant (optional)
+bridge:
+  enabled: false
+  sender_id: ""             # WhatsApp internal ID of the authorized sender
+  poll_interval: 30         # seconds between polls
+  message_timeout: 600      # seconds before Claude times out on a message
+  antenna_timeout: 900      # seconds for digest pipeline
+
+# Schedule — when `antenna run` runs automatically
+schedule:
+  time: "07:00"             # 24h format
+  timezone: "America/New_York"
