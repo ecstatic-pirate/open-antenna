@@ -24,7 +24,9 @@
   "dependencies": {
     "commander": "^12.0.0",
     "js-yaml": "^4.1.0",
-    "md-to-pdf": "^5.2.4",
+    "md-to-pdf": "^5.2.4"
+  },
+  "optionalDependencies": {
     "nodemailer": "^6.9.0"
   },
   "engines": {

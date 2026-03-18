@@ -12,9 +12,11 @@ Usage:
 """
 
 import argparse
+import html
 import json
 import re
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone, timedelta
 
 import feedparser
@@ -134,7 +136,7 @@ def fetch_videos(channel_id: str, limit: int = 15) -> list[dict]:
         elif hasattr(entry, "description"):
             raw_desc = entry.description
 
-        clean_desc = re.sub(r"<[^>]+>", "", raw_desc).strip()
+        clean_desc = html.unescape(re.sub(r"<[^>]+>", "", raw_desc)).strip()
         snippet = clean_desc[:300] + ("..." if len(clean_desc) > 300 else "")
 
         published = ""
@@ -208,14 +210,14 @@ def scan_config(config_path: str) -> list[dict]:
     exclude_shorts = yt_cfg.get("exclude_shorts", True)
     cutoff = datetime.now(timezone.utc) - timedelta(hours=max_hours)
 
-    results = []
-    for ch in channels:
+    def fetch_channel(ch):
         handle = ch.get("handle", "")
         label = ch.get("label", handle)
         if not handle:
-            continue
+            return []
         try:
             videos = fetch_videos(resolve_channel_id(handle), limit=15)
+            channel_results = []
             for v in videos:
                 url = v.get("url", "")
                 if exclude_shorts and "/shorts/" in url:
@@ -226,7 +228,7 @@ def scan_config(config_path: str) -> list[dict]:
                         continue
                 except Exception:
                     pass
-                results.append({
+                channel_results.append({
                     "title": v["title"],
                     "url": url,
                     "channel": label,
@@ -234,8 +236,16 @@ def scan_config(config_path: str) -> list[dict]:
                     "duration_seconds": v.get("duration_seconds"),
                     "views": v.get("views"),
                 })
+            return channel_results
         except Exception as e:
             print(json.dumps({"warning": f"Channel {handle} failed: {e}"}), file=sys.stderr)
+            return []
+
+    results = []
+    with ThreadPoolExecutor(max_workers=min(len(channels), 8)) as executor:
+        futures = {executor.submit(fetch_channel, ch): ch for ch in channels}
+        for future in as_completed(futures):
+            results.extend(future.result())
 
     return results
 
@@ -258,12 +268,6 @@ def pretty_print(videos: list[dict]) -> None:
         print(f"    URL       : {v['url']}")
         print(f"    Duration  : {duration}{views}")
         print()
-
-
-def scan(identifier: str, limit: int = 15, pretty: bool = False) -> list[dict]:
-    """Scan a single channel by handle/ID/URL. Returns list of video dicts."""
-    channel_id = resolve_channel_id(identifier)
-    return fetch_videos(channel_id, limit=limit)
 
 
 def main() -> None:
@@ -298,7 +302,7 @@ def main() -> None:
         if args.config:
             videos = scan_config(args.config)
         else:
-            videos = scan(args.channel, limit=args.limit)
+            videos = fetch_videos(resolve_channel_id(args.channel), limit=args.limit)
     except (ValueError, RuntimeError) as e:
         print(json.dumps({"error": str(e)}), file=sys.stderr)
         sys.exit(1)

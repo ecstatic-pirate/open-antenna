@@ -43,7 +43,7 @@ program
   .command('test-notify')
   .description('Send a test notification through all configured channels')
   .option('-c, --config <path>', 'Path to config.yaml', './config.yaml')
-  .action((options) => {
+  .action(() => {
     // TODO: implement in Phase 2
     console.log('test-notify: coming in Phase 2');
   });
@@ -53,7 +53,7 @@ program
   .command('schedule')
   .description('View or update the daily schedule')
   .option('-c, --config <path>', 'Path to config.yaml', './config.yaml')
-  .action((options) => {
+  .action(() => {
     // TODO: implement in Phase 4
     console.log('schedule: coming in Phase 4');
   });
@@ -67,7 +67,7 @@ bridge
   .command('start')
   .description('Start the WhatsApp bridge daemon')
   .option('-c, --config <path>', 'Path to config.yaml', './config.yaml')
-  .action((options) => {
+  .action(() => {
     // TODO: implement in Phase 2
     console.log('bridge start: coming in Phase 2');
   });
