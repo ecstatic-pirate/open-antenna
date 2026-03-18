@@ -3,3 +3,6 @@ output/
 *.log
 .DS_Store
 *.pdf
+__pycache__/
+*.pyc
+*.pyo
