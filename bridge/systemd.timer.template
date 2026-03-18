@@ -1,0 +1,11 @@
+[Unit]
+Description=Open Antenna WhatsApp Bridge — poll timer
+Requires=open-antenna-bridge.service
+
+[Timer]
+OnBootSec=30
+OnUnitActiveSec={{POLL_INTERVAL}}s
+Unit=open-antenna-bridge.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,18 @@
+[Unit]
+Description=Open Antenna WhatsApp Bridge
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart={{BRIDGE_SCRIPT}}
+
+Environment=ANTENNA_CONFIG={{CONFIG_PATH}}
+Environment=ANTENNA_DATA_DIR={{DATA_DIR}}
+Environment=PATH={{PATH_VALUE}}
+
+# stdout/stderr go to journald; also piped to bridge.log by the script itself
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

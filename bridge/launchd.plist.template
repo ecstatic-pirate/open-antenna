@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>io.open-antenna.bridge</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>{{BRIDGE_SCRIPT}}</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>ANTENNA_CONFIG</key>
+        <string>{{CONFIG_PATH}}</string>
+        <key>ANTENNA_DATA_DIR</key>
+        <string>{{DATA_DIR}}</string>
+        <key>PATH</key>
+        <string>{{PATH_VALUE}}</string>
+    </dict>
+
+    <!-- Poll every N seconds -->
+    <key>StartInterval</key>
+    <integer>{{POLL_INTERVAL}}</integer>
+
+    <!-- Restart automatically if it crashes -->
+    <key>KeepAlive</key>
+    <false/>
+
+    <!-- Run even when on battery -->
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <key>StandardOutPath</key>
+    <string>{{DATA_DIR}}/bridge-launchd.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>{{DATA_DIR}}/bridge-launchd-err.log</string>
+</dict>
+</plist>
