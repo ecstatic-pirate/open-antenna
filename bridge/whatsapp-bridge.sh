@@ -43,24 +43,46 @@ _CONFIG_VALS=$(python3 - "$CONFIG_FILE" <<'PYEOF'
 import sys, re
 
 def parse_simple_yaml(path):
-    """Minimal YAML parser: handles flat and one-level nested keys."""
+    """Minimal YAML parser: handles flat, one-level, and two-level nested keys."""
     data = {}
     current_section = None
+    current_subsection = None
     with open(path) as f:
         for line in f:
             line = re.sub(r'\s*#.*$', '', line).rstrip()
             if not line:
                 continue
+            # Top-level section (no value)
             m = re.match(r'^(\w[\w\-]*)\s*:\s*$', line)
             if m:
                 current_section = m.group(1)
                 data[current_section] = {}
+                current_subsection = None
                 continue
+            # Two-space indent subsection (no value)
+            m = re.match(r'^  (\w[\w\-_]*)\s*:\s*$', line)
+            if m and current_section:
+                current_subsection = m.group(1)
+                data[current_section][current_subsection] = {}
+                continue
+            # Four-space indent value (under subsection)
+            m = re.match(r'^    (\w[\w\-_]*)\s*:\s*(.+)$', line)
+            if m and current_section and current_subsection:
+                val = m.group(2).strip().strip('"').strip("'")
+                if isinstance(data[current_section].get(current_subsection), dict):
+                    data[current_section][current_subsection][m.group(1)] = val
+                continue
+            # Two-space indent value (under section)
             m = re.match(r'^\s{2,}(\w[\w\-_]*)\s*:\s*(.*)$', line)
             if m and current_section:
                 val = m.group(2).strip().strip('"').strip("'")
-                data[current_section][m.group(1)] = val
+                if current_subsection and isinstance(data[current_section].get(current_subsection), dict):
+                    data[current_section][current_subsection][m.group(1)] = val
+                else:
+                    current_subsection = None
+                    data[current_section][m.group(1)] = val
                 continue
+            # Top-level value
             m = re.match(r'^(\w[\w\-_]*)\s*:\s*(.+)$', line)
             if m:
                 val = m.group(2).strip().strip('"').strip("'")
@@ -79,10 +101,10 @@ def get(data, key, default=''):
 
 path = sys.argv[1]
 data = parse_simple_yaml(path)
-print(get(data, 'bridge.sender_id', ''))
-print(get(data, 'bridge.poll_interval', '30'))
-print(get(data, 'bridge.message_timeout', '600'))
-print(get(data, 'bridge.antenna_timeout', '900'))
+print(get(data, 'bridge.whatsapp.sender_id', get(data, 'bridge.sender_id', '')))
+print(get(data, 'bridge.whatsapp.poll_interval', get(data, 'bridge.poll_interval', '30')))
+print(get(data, 'bridge.whatsapp.message_timeout', get(data, 'bridge.message_timeout', '600')))
+print(get(data, 'bridge.whatsapp.antenna_timeout', get(data, 'bridge.antenna_timeout', '900')))
 print(get(data, 'schedule.time', '07:00'))
 print(get(data, 'schedule.timezone', 'UTC'))
 PYEOF

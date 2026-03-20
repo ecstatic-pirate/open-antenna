@@ -53,13 +53,30 @@ notifications:
     to: "you@gmail.com"
     subject_prefix: "[Daily Intel]"
 
-# WhatsApp Bridge — two-way AI assistant (optional)
+# Bridge — two-way AI assistants (optional)
+# Both bridges share the same Claude session for unified context.
 bridge:
-  enabled: false
-  sender_id: ""             # WhatsApp internal ID of the authorized sender
-  poll_interval: 30         # seconds between polls
-  message_timeout: 600      # seconds before Claude times out on a message
-  antenna_timeout: 900      # seconds for digest pipeline
+  whatsapp:
+    enabled: false
+    sender_id: ""             # WhatsApp internal ID of the authorized sender
+    poll_interval: 30         # seconds between polls
+    message_timeout: 600      # seconds before Claude times out on a message
+    antenna_timeout: 900      # seconds for digest pipeline
+
+  email:
+    enabled: false
+    imap_host: "imap.gmail.com"
+    imap_port: 993
+    imap_user: "you@gmail.com"
+    imap_pass_env: "ANTENNA_IMAP_PASS"   # env var name holding your IMAP password
+    folder: "INBOX"           # IMAP folder to monitor
+    poll_interval: 60         # seconds between polls
+    message_timeout: 600      # seconds before Claude times out on a message
+    reply_to: "you@gmail.com" # fixed address to send all replies to
+    smtp_host: "smtp.gmail.com"
+    smtp_port: 587
+    smtp_user: "you@gmail.com"
+    smtp_pass_env: "ANTENNA_SMTP_PASS"   # env var name holding your SMTP password
 
 # Schedule — when `antenna run` runs automatically
 schedule:

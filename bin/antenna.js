@@ -159,12 +159,14 @@ program
 
 const bridge = program
   .command('bridge')
-  .description('Manage the two-way WhatsApp AI assistant daemon');
+  .description('Manage two-way AI assistant daemons (WhatsApp + Email)');
 
 bridge
   .command('start')
-  .description('Install and start the WhatsApp bridge daemon')
+  .description('Install and start bridge daemon(s)')
   .option('-c, --config <path>', 'Path to config.yaml', './config.yaml')
+  .option('--whatsapp', 'Start WhatsApp bridge only')
+  .option('--email', 'Start email bridge only')
   .action((options) => {
     const bridgeLib = require('../lib/bridge');
     bridgeLib.start(options).catch((err) => {
@@ -175,10 +177,12 @@ bridge
 
 bridge
   .command('stop')
-  .description('Stop the WhatsApp bridge daemon')
-  .action(() => {
+  .description('Stop bridge daemon(s)')
+  .option('--whatsapp', 'Stop WhatsApp bridge only')
+  .option('--email', 'Stop email bridge only')
+  .action((options) => {
     const bridgeLib = require('../lib/bridge');
-    bridgeLib.stop().catch((err) => {
+    bridgeLib.stop(options).catch((err) => {
       console.error('Error:', err.message);
       process.exit(1);
     });
@@ -186,10 +190,12 @@ bridge
 
 bridge
   .command('status')
-  .description('Check if the bridge daemon is running')
-  .action(() => {
+  .description('Check bridge daemon status')
+  .option('--whatsapp', 'Check WhatsApp bridge only')
+  .option('--email', 'Check email bridge only')
+  .action((options) => {
     const bridgeLib = require('../lib/bridge');
-    bridgeLib.status().catch((err) => {
+    bridgeLib.status(options).catch((err) => {
       console.error('Error:', err.message);
       process.exit(1);
     });
@@ -197,11 +203,13 @@ bridge
 
 bridge
   .command('logs')
-  .description('Tail the bridge log')
+  .description('Tail bridge log(s)')
   .option('-n, --lines <n>', 'Number of lines to show', '50')
+  .option('--whatsapp', 'Show WhatsApp bridge logs')
+  .option('--email', 'Show email bridge logs')
   .action((options) => {
     const bridgeLib = require('../lib/bridge');
-    bridgeLib.logs({ lines: parseInt(options.lines, 10) }).catch((err) => {
+    bridgeLib.logs({ lines: parseInt(options.lines, 10), ...options }).catch((err) => {
       console.error('Error:', err.message);
       process.exit(1);
     });

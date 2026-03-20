@@ -1,6 +1,6 @@
 {
   "name": "open-antenna",
-  "version": "0.1.0",
+  "version": "0.1.3",
   "description": "AI-powered daily intelligence briefing — scans YouTube + Hacker News, processes via Claude, delivers PDF digest via WhatsApp or email",
   "main": "lib/run.js",
   "bin": {

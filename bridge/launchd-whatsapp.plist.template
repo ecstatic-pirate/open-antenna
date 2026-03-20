@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>io.open-antenna.bridge</string>
+    <string>io.open-antenna.whatsapp-bridge</string>
 
     <key>ProgramArguments</key>
     <array>

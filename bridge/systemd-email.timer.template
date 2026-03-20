@@ -1,0 +1,11 @@
+[Unit]
+Description=Open Antenna Email Bridge — poll timer
+Requires=open-antenna-email-bridge.service
+
+[Timer]
+OnBootSec=30
+OnUnitActiveSec={{POLL_INTERVAL}}s
+Unit=open-antenna-email-bridge.service
+
+[Install]
+WantedBy=timers.target
