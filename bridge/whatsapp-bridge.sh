@@ -462,4 +462,108 @@ for i, m in enumerate(msgs):
     rm -f "$CLAUDE_ERR"
 done
 
+# ── Drain check: catch messages that arrived during processing ───────────────
+# Re-sync and fetch once more. Max 3 drain cycles to prevent infinite loops.
+
+DRAIN_CYCLE=0
+MAX_DRAIN=3
+
+while [ "$DRAIN_CYCLE" -lt "$MAX_DRAIN" ]; do
+    DRAIN_CYCLE=$((DRAIN_CYCLE + 1))
+
+    # Read current state timestamp (updated per-message in the loop above)
+    DRAIN_TS=$(cat "$STATE_FILE" 2>/dev/null || echo "$FALLBACK_TS")
+
+    "$WACLI_BIN" sync --once --idle-exit 10s >> "$LOG_FILE" 2>&1
+    DRAIN_MESSAGES=$("$WACLI_BIN" messages list --chat "$SENDER_ID" --after "$DRAIN_TS" --limit 20 --json 2>/dev/null)
+
+    if [ $? -ne 0 ] || [ -z "$DRAIN_MESSAGES" ]; then
+        break
+    fi
+
+    DRAIN_PARSED=$(echo "$DRAIN_MESSAGES" | python3 - "$SENDER_PREFIX" <<'EOF'
+import sys, json
+
+prefix = sys.argv[1]
+data = json.load(sys.stdin)
+msgs = data.get('data', {}).get('messages', [])
+filtered = [m for m in msgs if m.get('SenderJID', '').startswith(prefix) and m.get('Text')]
+result = [{'text': m['Text'], 'timestamp': m.get('Timestamp', '')} for m in reversed(filtered)]
+print(json.dumps(result))
+EOF
+)
+
+    DRAIN_COUNT=$(echo "$DRAIN_PARSED" | python3 -c "import sys,json; print(len(json.load(sys.stdin)))" 2>/dev/null || echo 0)
+
+    if [ -z "$DRAIN_COUNT" ] || [ "$DRAIN_COUNT" -eq 0 ]; then
+        break
+    fi
+
+    log "Drain cycle $DRAIN_CYCLE: found $DRAIN_COUNT new message(s) that arrived during processing"
+
+    DIDX=0
+    while [ "$DIDX" -lt "$DRAIN_COUNT" ]; do
+        USER_MSG=$(echo "$DRAIN_PARSED" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d[$DIDX]['text'])")
+        MSG_TS=$(echo "$DRAIN_PARSED" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d[$DIDX].get('timestamp',''))")
+
+        log "Drain processing message $((DIDX+1))/$DRAIN_COUNT: ${USER_MSG:0:80}..."
+
+        NEXT_STATE_TS=""
+        if [ -n "$MSG_TS" ] && [ "$MSG_TS" != "null" ]; then
+            if [ "$OS" = "Darwin" ]; then
+                EPOCH=$(date -u -jf '%Y-%m-%dT%H:%M:%SZ' "$MSG_TS" '+%s' 2>/dev/null)
+                [ -n "$EPOCH" ] && NEXT_STATE_TS=$(date -u -r "$((EPOCH + 1))" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null)
+            else
+                NEXT_STATE_TS=$(date -u -d "$MSG_TS + 1 second" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null)
+            fi
+        fi
+        [ -z "$NEXT_STATE_TS" ] && NEXT_STATE_TS=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+
+        # Long-task ack
+        IS_LONG_TASK=false
+        if [[ "$USER_MSG" =~ /(read-article|read-book|read-podcast|skill-creator|antenna|create-skill) ]] || \
+           ( [[ "$USER_MSG" =~ https?:// ]] && ! [[ "$USER_MSG" =~ (to\ done|mark|delete|move) ]] ); then
+            IS_LONG_TASK=true
+        fi
+        if [ "$IS_LONG_TASK" = true ]; then
+            send_to_user "On it — this may take a few minutes."
+            log "Sent long-task ack (drain)"
+        fi
+
+        RESPONSE=$(echo "$USER_MSG" | timeout "$MESSAGE_TIMEOUT" "$CLAUDE_BIN" \
+            --print \
+            --dangerously-skip-permissions \
+            --allowedTools "Read,Write,Bash,WebFetch" \
+            --add-dir "$SKILLS_DIR" \
+            $SESSION_FLAG \
+            --append-system-prompt "$WHATSAPP_FORMAT" \
+            2>"$CLAUDE_ERR")
+        EXIT_CODE=$?
+
+        if [ $EXIT_CODE -eq 124 ]; then
+            log "Claude timed out (drain) for message $((DIDX+1))"
+            send_to_user "[Request timed out — try again]"
+            echo "$NEXT_STATE_TS" > "$STATE_FILE"
+        elif [ $EXIT_CODE -eq 0 ] && [ -n "$RESPONSE" ]; then
+            send_to_user "$RESPONSE"
+            log "Sent drain response (${#RESPONSE} chars)"
+            echo "$NEXT_STATE_TS" > "$STATE_FILE"
+            echo 0 > "$FAIL_COUNT_FILE"
+        else
+            log "Claude failed (drain, exit $EXIT_CODE): $(tail -5 "$CLAUDE_ERR" 2>/dev/null)"
+            if grep -qi "session\|resume\|invalid" "$CLAUDE_ERR" 2>/dev/null; then
+                log "Session may be corrupted — resetting (drain)"
+                rm -f "$SESSION_FILE"
+            fi
+            send_to_user "[Unavailable — try again]"
+            echo "$NEXT_STATE_TS" > "$STATE_FILE"
+        fi
+
+        rm -f "$CLAUDE_ERR"
+        DIDX=$((DIDX + 1))
+    done
+
+    log "Drain cycle $DRAIN_CYCLE done — processed $DRAIN_COUNT message(s)"
+done
+
 log "Done"
