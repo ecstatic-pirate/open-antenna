@@ -316,7 +316,7 @@ if [ $? -ne 0 ] || [ -z "$MESSAGES" ]; then
     exit 0
 fi
 
-# Parse: filter to sender's messages, extract text + latest timestamp
+# Parse: filter to sender's messages, output JSON array of {text, timestamp} in chronological order
 PARSED=$(echo "$MESSAGES" | python3 - "$SENDER_PREFIX" <<'EOF'
 import sys, json
 
@@ -324,47 +324,23 @@ prefix = sys.argv[1]
 data = json.load(sys.stdin)
 msgs = data.get('data', {}).get('messages', [])
 filtered = [m for m in msgs if m.get('SenderJID', '').startswith(prefix) and m.get('Text')]
-texts = '\n'.join(m['Text'] for m in reversed(filtered))
-timestamps = [m['Timestamp'] for m in filtered if m.get('Timestamp')]
-latest_ts = sorted(timestamps)[-1] if timestamps else ''
-print(json.dumps({'texts': texts, 'latest_ts': latest_ts}))
+result = [{'text': m['Text'], 'timestamp': m.get('Timestamp', '')} for m in reversed(filtered)]
+print(json.dumps(result))
 EOF
 )
 
-# Decode both fields from PARSED in one python3 call; fields separated by a unique delimiter line
-_PARSED_OUT=$(echo "$PARSED" | python3 -c "
-import sys, json
-d = json.load(sys.stdin)
-print(d.get('texts', ''))
-print('---ANTENNA-TS---')
-print(d.get('latest_ts', ''))
-")
-USER_MSGS=$(echo "$_PARSED_OUT" | sed -n '1,/^---ANTENNA-TS---$/{ /^---ANTENNA-TS---$/!p }')
-LATEST_MSG_TS=$(echo "$_PARSED_OUT" | sed -n '/^---ANTENNA-TS---$/,$ { /^---ANTENNA-TS---$/!p }')
+# Count messages
+MSG_COUNT=$(echo "$PARSED" | python3 -c "import sys,json; print(len(json.load(sys.stdin)))" 2>/dev/null || echo 0)
 
-if [ -z "$USER_MSGS" ]; then
+if [ -z "$PARSED" ] || [ "$MSG_COUNT" -eq 0 ]; then
     echo "$FALLBACK_TS" > "$STATE_FILE"
     exit 0
 fi
 
-log "Polling after $LAST_TS — found messages"
-log "Latest msg timestamp: $LATEST_MSG_TS"
-
-# Compute next state timestamp (+1s to avoid reprocessing the latest message)
-NEXT_STATE_TS=""
-if [ -n "$LATEST_MSG_TS" ] && [ "$LATEST_MSG_TS" != "null" ]; then
-    if [ "$OS" = "Darwin" ]; then
-        EPOCH=$(date -u -jf '%Y-%m-%dT%H:%M:%SZ' "$LATEST_MSG_TS" '+%s' 2>/dev/null)
-        [ -n "$EPOCH" ] && NEXT_STATE_TS=$(date -u -r "$((EPOCH + 1))" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null)
-    else
-        NEXT_STATE_TS=$(date -u -d "$LATEST_MSG_TS + 1 second" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null)
-    fi
-fi
-[ -z "$NEXT_STATE_TS" ] && NEXT_STATE_TS="$FALLBACK_TS"
-
-log "Next state timestamp: $NEXT_STATE_TS"
+log "Polling after $LAST_TS — found $MSG_COUNT message(s)"
 
 # ── Session management ───────────────────────────────────────────────────────
+# Load once; used for all messages in this poll cycle.
 
 load_or_create_session "Message"
 if [ -z "$SESSION_FLAG" ]; then
@@ -372,24 +348,8 @@ if [ -z "$SESSION_FLAG" ]; then
     exit 1
 fi
 
-log "Processing: ${USER_MSGS:0:80}..."
-
-# ── Long-task ack ────────────────────────────────────────────────────────────
-# Send an immediate acknowledgement for requests that will take a while.
-
-IS_LONG_TASK=false
-# Skill commands or bare URLs (not quick-action keywords) get an immediate ack
-if [[ "$USER_MSGS" =~ /(read-article|read-book|read-podcast|skill-creator|antenna|create-skill) ]] || \
-   ( [[ "$USER_MSGS" =~ https?:// ]] && ! [[ "$USER_MSGS" =~ (to\ done|mark|delete|move) ]] ); then
-    IS_LONG_TASK=true
-fi
-
-if [ "$IS_LONG_TASK" = true ]; then
-    send_to_user "On it — this may take a few minutes."
-    log "Sent long-task ack"
-fi
-
 # ── WhatsApp formatting system prompt ────────────────────────────────────────
+# Defined once, applied to every message.
 
 WHATSAPP_FORMAT="You are responding via WhatsApp. Format ALL output for WhatsApp:
 - NEVER use markdown tables (pipe characters), Unicode box tables, or any tabular format. WhatsApp screens are narrow — tables always break.
@@ -400,59 +360,106 @@ WHATSAPP_FORMAT="You are responding via WhatsApp. Format ALL output for WhatsApp
 - Keep responses concise — this is mobile chat, not a document.
 - Short paragraphs. Blank lines between sections. No walls of text."
 
-# ── Claude invocation ────────────────────────────────────────────────────────
+# ── Process each message individually ────────────────────────────────────────
 
-RESPONSE=$(echo "$USER_MSGS" | timeout "$MESSAGE_TIMEOUT" "$CLAUDE_BIN" \
-    --print \
-    --dangerously-skip-permissions \
-    --allowedTools "Read,Write,Bash,WebFetch" \
-    --add-dir "$SKILLS_DIR" \
-    $SESSION_FLAG \
-    --append-system-prompt "$WHATSAPP_FORMAT" \
-    2>"$CLAUDE_ERR")
-EXIT_CODE=$?
-
-# ── Response handling ────────────────────────────────────────────────────────
-
-# Timeout (exit code 124 from the timeout command)
-if [ $EXIT_CODE -eq 124 ]; then
-    log "Claude timed out after ${MESSAGE_TIMEOUT}s"
-    send_to_user "[Request timed out after ${MESSAGE_TIMEOUT}s — please try again]"
-    echo "$NEXT_STATE_TS" > "$STATE_FILE"
-    echo 0 > "$FAIL_COUNT_FILE"
-    rm -f "$CLAUDE_ERR"
-    log "Done (timeout)"
-    exit 0
-fi
-
-if [ $EXIT_CODE -eq 0 ] && [ -n "$RESPONSE" ]; then
-    send_to_user "$RESPONSE"
-    log "Sent response (${#RESPONSE} chars)"
-    echo "$NEXT_STATE_TS" > "$STATE_FILE"
-    echo 0 > "$FAIL_COUNT_FILE"
-else
-    log "Claude failed (exit $EXIT_CODE): $(tail -5 "$CLAUDE_ERR" 2>/dev/null)"
-
-    # Session corruption check — reset so next run starts fresh
-    if grep -qi "session\|resume\|invalid" "$CLAUDE_ERR" 2>/dev/null; then
-        log "Session may be corrupted — resetting"
-        rm -f "$SESSION_FILE"
+echo "$PARSED" | python3 -c "
+import sys, json
+msgs = json.load(sys.stdin)
+for i, m in enumerate(msgs):
+    print(f'---MSG-DELIM-{i}---')
+    print(json.dumps(m))
+" | while IFS= read -r line; do
+    # Skip delimiter lines, capture message JSON
+    if [[ "$line" == ---MSG-DELIM-* ]]; then
+        continue
     fi
 
-    send_to_user "[Unavailable right now — try again in a moment]"
+    # Parse this message
+    MSG_TEXT=$(echo "$line" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['text'])")
+    MSG_TS=$(echo "$line" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('timestamp',''))")
 
-    # Poison message skip: after 3 consecutive failures, advance timestamp
-    FAIL_COUNT=0
-    [ -f "$FAIL_COUNT_FILE" ] && FAIL_COUNT=$(cat "$FAIL_COUNT_FILE")
-    FAIL_COUNT=$((FAIL_COUNT + 1))
-    echo "$FAIL_COUNT" > "$FAIL_COUNT_FILE"
+    log "Processing message ts=$MSG_TS: ${MSG_TEXT:0:80}..."
 
-    if [ "$FAIL_COUNT" -ge 3 ]; then
-        log "3 consecutive failures — advancing timestamp to skip poison messages"
+    # Compute next state timestamp for this message (+1s to avoid reprocessing)
+    NEXT_STATE_TS=""
+    if [ -n "$MSG_TS" ] && [ "$MSG_TS" != "null" ]; then
+        if [ "$OS" = "Darwin" ]; then
+            EPOCH=$(date -u -jf '%Y-%m-%dT%H:%M:%SZ' "$MSG_TS" '+%s' 2>/dev/null)
+            [ -n "$EPOCH" ] && NEXT_STATE_TS=$(date -u -r "$((EPOCH + 1))" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null)
+        else
+            NEXT_STATE_TS=$(date -u -d "$MSG_TS + 1 second" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null)
+        fi
+    fi
+    [ -z "$NEXT_STATE_TS" ] && NEXT_STATE_TS="$FALLBACK_TS"
+
+    # ── Long-task ack ────────────────────────────────────────────────────────
+    # Send an immediate acknowledgement for requests that will take a while.
+
+    IS_LONG_TASK=false
+    if [[ "$MSG_TEXT" =~ /(read-article|read-book|read-podcast|skill-creator|antenna|create-skill) ]] || \
+       ( [[ "$MSG_TEXT" =~ https?:// ]] && ! [[ "$MSG_TEXT" =~ (to\ done|mark|delete|move) ]] ); then
+        IS_LONG_TASK=true
+    fi
+
+    if [ "$IS_LONG_TASK" = true ]; then
+        send_to_user "On it — this may take a few minutes."
+        log "Sent long-task ack"
+    fi
+
+    # ── Claude invocation ────────────────────────────────────────────────────
+
+    RESPONSE=$(echo "$MSG_TEXT" | timeout "$MESSAGE_TIMEOUT" "$CLAUDE_BIN" \
+        --print \
+        --dangerously-skip-permissions \
+        --allowedTools "Read,Write,Bash,WebFetch" \
+        --add-dir "$SKILLS_DIR" \
+        $SESSION_FLAG \
+        --append-system-prompt "$WHATSAPP_FORMAT" \
+        2>"$CLAUDE_ERR")
+    EXIT_CODE=$?
+
+    # ── Response handling ────────────────────────────────────────────────────
+
+    # Timeout (exit code 124 from the timeout command)
+    if [ $EXIT_CODE -eq 124 ]; then
+        log "Claude timed out after ${MESSAGE_TIMEOUT}s for ts=$MSG_TS"
+        send_to_user "[Request timed out after ${MESSAGE_TIMEOUT}s — please try again]"
         echo "$NEXT_STATE_TS" > "$STATE_FILE"
         echo 0 > "$FAIL_COUNT_FILE"
+        rm -f "$CLAUDE_ERR"
+        continue
     fi
-fi
 
-rm -f "$CLAUDE_ERR"
+    if [ $EXIT_CODE -eq 0 ] && [ -n "$RESPONSE" ]; then
+        send_to_user "$RESPONSE"
+        log "Sent response (${#RESPONSE} chars)"
+        echo "$NEXT_STATE_TS" > "$STATE_FILE"
+        echo 0 > "$FAIL_COUNT_FILE"
+    else
+        log "Claude failed (exit $EXIT_CODE) for ts=$MSG_TS: $(tail -5 "$CLAUDE_ERR" 2>/dev/null)"
+
+        # Session corruption check — reset so next run starts fresh
+        if grep -qi "session\|resume\|invalid" "$CLAUDE_ERR" 2>/dev/null; then
+            log "Session may be corrupted — resetting"
+            rm -f "$SESSION_FILE"
+        fi
+
+        send_to_user "[Unavailable right now — try again in a moment]"
+
+        # Poison message skip: after 3 consecutive failures, advance timestamp
+        FAIL_COUNT=0
+        [ -f "$FAIL_COUNT_FILE" ] && FAIL_COUNT=$(cat "$FAIL_COUNT_FILE")
+        FAIL_COUNT=$((FAIL_COUNT + 1))
+        echo "$FAIL_COUNT" > "$FAIL_COUNT_FILE"
+
+        if [ "$FAIL_COUNT" -ge 3 ]; then
+            log "3 consecutive failures — advancing timestamp to skip poison message ts=$MSG_TS"
+            echo "$NEXT_STATE_TS" > "$STATE_FILE"
+            echo 0 > "$FAIL_COUNT_FILE"
+        fi
+    fi
+
+    rm -f "$CLAUDE_ERR"
+done
+
 log "Done"
