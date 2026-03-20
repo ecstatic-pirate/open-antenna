@@ -18,7 +18,6 @@
         <string>{{DATA_DIR}}</string>
         <key>PATH</key>
         <string>{{PATH_VALUE}}</string>
-        {{ENV_VARS}}
     </dict>
 
     <!-- Poll every N seconds -->

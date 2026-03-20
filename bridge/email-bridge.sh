@@ -179,6 +179,7 @@ generate_uuid() {
 
 # load_or_create_session <label>
 # Sets SESSION_FLAG. Uses the SHARED session file (same as WhatsApp bridge).
+# Atomic write via temp file + mv to avoid race with WhatsApp bridge.
 load_or_create_session() {
     local label="${1:-Session}"
     if [ -f "$SESSION_FILE" ]; then
@@ -193,7 +194,10 @@ load_or_create_session() {
             log "$label: failed to generate session UUID"
             SESSION_FLAG=""
         else
-            echo "$session_id" > "$SESSION_FILE"
+            local tmpfile
+            tmpfile=$(mktemp "$DATA_DIR/bridge-session.XXXXXX")
+            echo "$session_id" > "$tmpfile"
+            mv "$tmpfile" "$SESSION_FILE"  # atomic on same filesystem
             SESSION_FLAG="--session-id $session_id"
             log "$label: created session $session_id"
         fi
@@ -201,22 +205,30 @@ load_or_create_session() {
 }
 
 # send_email_reply <subject> <body>
-# Sends an email reply via SMTP using python3 + smtplib (no npm dependency needed in bash)
+# Sends an email reply via SMTP using python3 + smtplib.
+# Credentials passed via env vars (not argv) to avoid ps visibility.
 send_email_reply() {
     local subject="$1"
     local body="$2"
 
-    python3 - "$SMTP_HOST" "$SMTP_PORT" "$SMTP_USER" "$SMTP_PASS" "$REPLY_TO" "$subject" "$body" <<'PYEOF'
-import sys, smtplib
+    _ANTENNA_SMTP_HOST="$SMTP_HOST" \
+    _ANTENNA_SMTP_PORT="$SMTP_PORT" \
+    _ANTENNA_SMTP_USER="$SMTP_USER" \
+    _ANTENNA_SMTP_PASS="$SMTP_PASS" \
+    _ANTENNA_REPLY_TO="$REPLY_TO" \
+    _ANTENNA_SUBJECT="$subject" \
+    _ANTENNA_BODY="$body" \
+    python3 - <<'PYEOF'
+import os, smtplib
 from email.mime.text import MIMEText
 
-smtp_host = sys.argv[1]
-smtp_port = int(sys.argv[2])
-smtp_user = sys.argv[3]
-smtp_pass = sys.argv[4]
-reply_to = sys.argv[5]
-subject = sys.argv[6]
-body = sys.argv[7]
+smtp_host = os.environ['_ANTENNA_SMTP_HOST']
+smtp_port = int(os.environ['_ANTENNA_SMTP_PORT'])
+smtp_user = os.environ['_ANTENNA_SMTP_USER']
+smtp_pass = os.environ['_ANTENNA_SMTP_PASS']
+reply_to = os.environ['_ANTENNA_REPLY_TO']
+subject = os.environ['_ANTENNA_SUBJECT']
+body = os.environ['_ANTENNA_BODY']
 
 msg = MIMEText(body, 'plain', 'utf-8')
 msg['From'] = smtp_user
@@ -237,27 +249,35 @@ PYEOF
 
 # fetch_unseen_emails
 # Returns JSON array of unseen emails: [{uid, subject, body, from}, ...]
+# Uses IMAP UID commands (not sequence numbers) for concurrent-access safety.
+# Credentials passed via env vars to avoid ps visibility.
 fetch_unseen_emails() {
-    python3 - "$IMAP_HOST" "$IMAP_PORT" "$IMAP_USER" "$IMAP_PASS" "$IMAP_FOLDER" <<'PYEOF'
-import sys, imaplib, email, json
+    _ANTENNA_IMAP_HOST="$IMAP_HOST" \
+    _ANTENNA_IMAP_PORT="$IMAP_PORT" \
+    _ANTENNA_IMAP_USER="$IMAP_USER" \
+    _ANTENNA_IMAP_PASS="$IMAP_PASS" \
+    _ANTENNA_IMAP_FOLDER="$IMAP_FOLDER" \
+    python3 - <<'PYEOF'
+import os, imaplib, email, json
 from email.header import decode_header
 
-imap_host = sys.argv[1]
-imap_port = int(sys.argv[2])
-imap_user = sys.argv[3]
-imap_pass = sys.argv[4]
-folder = sys.argv[5]
+imap_host = os.environ['_ANTENNA_IMAP_HOST']
+imap_port = int(os.environ['_ANTENNA_IMAP_PORT'])
+imap_user = os.environ['_ANTENNA_IMAP_USER']
+imap_pass = os.environ['_ANTENNA_IMAP_PASS']
+folder = os.environ['_ANTENNA_IMAP_FOLDER']
 
 try:
     mail = imaplib.IMAP4_SSL(imap_host, imap_port)
     mail.login(imap_user, imap_pass)
     mail.select(folder)
 
-    status, data = mail.search(None, 'UNSEEN')
+    # Use UID SEARCH (not SEARCH) — UIDs are stable across concurrent access
+    status, data = mail.uid('search', None, 'UNSEEN')
     if status != 'OK' or not data[0]:
         print('[]')
         mail.logout()
-        sys.exit(0)
+        exit(0)
 
     uids = data[0].split()
     # Limit to 10 messages per poll to avoid overload
@@ -265,7 +285,8 @@ try:
 
     results = []
     for uid in uids:
-        status, msg_data = mail.fetch(uid, '(RFC822)')
+        # Use UID FETCH (not FETCH) — matches UID SEARCH results
+        status, msg_data = mail.uid('fetch', uid, '(RFC822)')
         if status != 'OK':
             continue
 
@@ -307,31 +328,43 @@ try:
     mail.logout()
     print(json.dumps(results))
 except Exception as e:
-    print(f'[]', file=sys.stdout)
+    print('[]', file=sys.stdout)
     print(f'IMAP error: {e}', file=sys.stderr)
-    sys.exit(1)
+    exit(1)
 PYEOF
 }
 
 # mark_as_seen <uid>
-# Marks a specific email as seen (read) in IMAP
+# Marks a specific email as seen (read) in IMAP using UID STORE.
+# Returns 0 on success, 1 on failure.
 mark_as_seen() {
     local uid="$1"
-    python3 - "$IMAP_HOST" "$IMAP_PORT" "$IMAP_USER" "$IMAP_PASS" "$IMAP_FOLDER" "$uid" <<'PYEOF'
-import sys, imaplib
+    _ANTENNA_IMAP_HOST="$IMAP_HOST" \
+    _ANTENNA_IMAP_PORT="$IMAP_PORT" \
+    _ANTENNA_IMAP_USER="$IMAP_USER" \
+    _ANTENNA_IMAP_PASS="$IMAP_PASS" \
+    _ANTENNA_IMAP_FOLDER="$IMAP_FOLDER" \
+    _ANTENNA_UID="$uid" \
+    python3 - <<'PYEOF'
+import os, imaplib
 
-imap_host = sys.argv[1]
-imap_port = int(sys.argv[2])
-imap_user = sys.argv[3]
-imap_pass = sys.argv[4]
-folder = sys.argv[5]
-uid = sys.argv[6]
+imap_host = os.environ['_ANTENNA_IMAP_HOST']
+imap_port = int(os.environ['_ANTENNA_IMAP_PORT'])
+imap_user = os.environ['_ANTENNA_IMAP_USER']
+imap_pass = os.environ['_ANTENNA_IMAP_PASS']
+folder = os.environ['_ANTENNA_IMAP_FOLDER']
+uid = os.environ['_ANTENNA_UID']
 
-mail = imaplib.IMAP4_SSL(imap_host, imap_port)
-mail.login(imap_user, imap_pass)
-mail.select(folder)
-mail.store(uid, '+FLAGS', '\\Seen')
-mail.logout()
+try:
+    mail = imaplib.IMAP4_SSL(imap_host, imap_port)
+    mail.login(imap_user, imap_pass)
+    mail.select(folder)
+    # Use UID STORE (not STORE) — matches UID from UID SEARCH
+    mail.uid('store', uid, '+FLAGS', '\\Seen')
+    mail.logout()
+except Exception as e:
+    print(f'mark_as_seen error: {e}', file=__import__("sys").stderr)
+    exit(1)
 PYEOF
 }
 
@@ -449,7 +482,7 @@ $EMAIL_BODY"
     # Timeout
     if [ $EXIT_CODE -eq 124 ]; then
         log "Claude timed out after ${MESSAGE_TIMEOUT}s for UID=$EMAIL_UID"
-        mark_as_seen "$EMAIL_UID" 2>>"$LOG_FILE"
+        mark_as_seen "$EMAIL_UID" 2>>"$LOG_FILE" || log "WARNING: mark_as_seen failed for UID=$EMAIL_UID"
         echo 0 > "$FAIL_COUNT_FILE"
         rm -f "$CLAUDE_ERR"
         continue
@@ -468,7 +501,9 @@ $EMAIL_BODY"
             log "SMTP not configured — response generated but not sent (${#RESPONSE} chars)"
         fi
 
-        mark_as_seen "$EMAIL_UID" 2>>"$LOG_FILE"
+        if ! mark_as_seen "$EMAIL_UID" 2>>"$LOG_FILE"; then
+            log "WARNING: mark_as_seen failed for UID=$EMAIL_UID — may be reprocessed"
+        fi
         echo 0 > "$FAIL_COUNT_FILE"
     else
         log "Claude failed (exit $EXIT_CODE) for UID=$EMAIL_UID: $(tail -5 "$CLAUDE_ERR" 2>/dev/null)"

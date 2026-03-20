@@ -9,7 +9,6 @@ ExecStart={{BRIDGE_SCRIPT}}
 Environment=ANTENNA_CONFIG={{CONFIG_PATH}}
 Environment=ANTENNA_DATA_DIR={{DATA_DIR}}
 Environment=PATH={{PATH_VALUE}}
-{{ENV_VARS}}
 
 # stdout/stderr go to journald; also piped to email-bridge.log by the script itself
 StandardOutput=journal
