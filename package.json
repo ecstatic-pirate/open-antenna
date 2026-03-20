@@ -1,6 +1,6 @@
 {
   "name": "open-antenna",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "AI-powered daily intelligence briefing — scans YouTube + Hacker News, processes via Claude, delivers PDF digest via WhatsApp or email",
   "main": "lib/run.js",
   "bin": {
@@ -34,11 +34,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/OWNER/open-antenna.git"
+    "url": "https://github.com/ecstatic-pirate/open-antenna.git"
   },
-  "homepage": "https://github.com/OWNER/open-antenna#readme",
+  "homepage": "https://github.com/ecstatic-pirate/open-antenna#readme",
   "bugs": {
-    "url": "https://github.com/OWNER/open-antenna/issues"
+    "url": "https://github.com/ecstatic-pirate/open-antenna/issues"
   },
   "engines": {
     "node": ">=18.0.0"
