@@ -201,7 +201,10 @@ load_or_create_session() {
             log "$label: failed to generate session UUID"
             SESSION_FLAG=""
         else
-            echo "$session_id" > "$SESSION_FILE"
+            local tmpfile
+            tmpfile=$(mktemp "$DATA_DIR/bridge-session.XXXXXX")
+            echo "$session_id" > "$tmpfile"
+            mv "$tmpfile" "$SESSION_FILE"  # atomic on same filesystem
             SESSION_FLAG="--session-id $session_id"
             log "$label: created session $session_id"
         fi

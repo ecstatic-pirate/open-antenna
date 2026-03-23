@@ -6,6 +6,28 @@ Optionally: a two-way WhatsApp AI assistant. Send URLs, questions, or commands f
 
 ---
 
+## Security Warning
+
+**The WhatsApp and email bridges run Claude with `--dangerously-skip-permissions`.** This gives Claude unrestricted access to your filesystem, shell, and network. Incoming messages from external senders are passed directly as input to Claude — this is a prompt injection surface.
+
+**What this means:**
+
+- A malicious sender could craft a message designed to make Claude execute arbitrary shell commands, exfiltrate files, or take destructive actions on the host machine.
+- The `--dangerously-skip-permissions` flag removes all safety rails. There is no sandbox.
+- Anyone who can send a message to your WhatsApp number or email inbox can influence Claude's behavior.
+
+**Mitigations you should apply before running a bridge:**
+
+- **Restrict senders.** The `bridge.sender_id` (WhatsApp) and `bridge.email.imap_folder` (email) configs let you limit which messages are processed. Use them to whitelist only yourself or trusted senders.
+- **Run on a trusted network.** Do not expose the bridge machine publicly. Run it behind a firewall or on a personal device you control.
+- **Use a dedicated machine or container.** Running the bridge in a sandboxed VM or Docker container with limited filesystem mounts limits blast radius if an injection attack succeeds.
+- **Audit the `allowedTools` list.** The default (`Read,Write,Bash,WebFetch`) is broad. Remove `Bash` if you don't need Claude to run shell commands, or remove `Write` if read-only operation is sufficient.
+- **Monitor bridge logs.** `antenna bridge logs` tails the log. Unusual Claude behavior — unexpected file writes, outbound requests — is a sign of a successful injection.
+
+**Do not run the bridges if you cannot control who sends messages to the monitored number or inbox.**
+
+---
+
 ## Quick Start
 
 ```bash
